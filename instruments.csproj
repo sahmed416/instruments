@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- Matches VintagestoryAPI.dll's embedded TFM (.NETCoreApp,Version=v10.0)
+         on this machine's 1.22.3 install — verified in CLAUDE.md at the
+         repo root. Re-check this against your own install; the spec
+         explicitly warns not to guess it. -->
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Instruments</AssemblyName>
+    <RootNamespace>Instruments</RootNamespace>
+
+    <!-- VS mods are loaded from an unpacked folder next to the compiled DLL;
+         we don't want NuGet/runtime deps copied in since the game's own
+         process already provides them. -->
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(VINTAGE_STORY)' == ''">
+    <!-- Fallback for this machine so the project still resolves in an IDE
+         without VINTAGE_STORY set. Real builds should set the env var
+         rather than rely on this. -->
+    <VINTAGE_STORY>C:\Users\User\AppData\Roaming\Vintagestory</VINTAGE_STORY>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="VintagestoryAPI">
+      <HintPath>$(VINTAGE_STORY)\VintagestoryAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VintagestoryLib">
+      <HintPath>$(VINTAGE_STORY)\VintagestoryLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VSSurvivalMod">
+      <HintPath>$(VINTAGE_STORY)\Mods\VSSurvivalMod.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VSEssentials">
+      <HintPath>$(VINTAGE_STORY)\Mods\VSEssentials.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="protobuf-net">
+      <HintPath>$(VINTAGE_STORY)\Lib\protobuf-net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(VINTAGE_STORY)\Lib\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Stage a ready-to-copy mod folder under dist/ (gitignored), inside the
+       repo — never outside it. This does NOT touch the game's real Mods
+       folder; that copy step is on you, deliberately, since it writes
+       outside the working directory. See CLAUDE.md at the repo root for
+       that command. -->
+  <Target Name="StageModFolder" AfterTargets="Build">
+    <ItemGroup>
+      <ModAssets Include="assets\**\*.*" />
+      <ModDll Include="$(OutputPath)Instruments.dll" />
+      <ModPdb Include="$(OutputPath)Instruments.pdb" Condition="Exists('$(OutputPath)Instruments.pdb')" />
+      <ModInfo Include="modinfo.json" />
+      <ModIcon Include="modicon.png" Condition="Exists('modicon.png')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ModDll)" DestinationFolder="$(MSBuildProjectDirectory)\dist\instruments" />
+    <Copy SourceFiles="@(ModPdb)" DestinationFolder="$(MSBuildProjectDirectory)\dist\instruments" />
+    <Copy SourceFiles="@(ModInfo)" DestinationFolder="$(MSBuildProjectDirectory)\dist\instruments" />
+    <Copy SourceFiles="@(ModIcon)" DestinationFolder="$(MSBuildProjectDirectory)\dist\instruments" />
+    <Copy SourceFiles="@(ModAssets)" DestinationFolder="$(MSBuildProjectDirectory)\dist\instruments\assets\%(RecursiveDir)" />
+  </Target>
+
+</Project>

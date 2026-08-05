@@ -1,0 +1,11 @@
+{
+	"item-instrument-banjo": "Banjo",
+	"item-instrument-harmonica": "Harmonica",
+	"item-instrument-flute": "Flute",
+	"item-instrument-drums": "Drums",
+	"item-instrument-whistle": "Whistle",
+	"hotkey-instrument_play": "Play / Stop Instrument",
+	"hotkey-instrument_next": "Next Instrument",
+	"instrument-heldinfo": "Press {0} to play, {1} to switch instrument. Stand still while playing — moving stops the music.",
+	"instrument-start-rejected": "You can't start playing right now."
+}
