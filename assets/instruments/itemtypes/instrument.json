@@ -12,16 +12,15 @@
 	// The shape file and its two textures are copied verbatim into THIS
 	// mod's own assets (shapes/item/tool/instrument/flute1.json,
 	// textures/block/coal/coke.png, textures/block/creature/bone/bone1.png)
-	// rather than referenced cross-domain via "survival:...". Two prior
-	// attempts at cross-domain reuse (first an incomplete texture override,
-	// then a "survival" modinfo dependency to fix load order) both still
-	// rendered as a missing-asset placeholder cube in-game per
-	// client-main.log ("Did not find required shape survival:... anywhere"),
-	// for reasons not fully pinned down from log-reading alone with no
-	// graphical client available to inspect directly (see CLAUDE.md at the
-	// repo root for the short version). Bundling the assets locally
-	// sidesteps the whole class of cross-domain/load-order questions rather
-	// than resolving them.
+	// rather than referenced cross-domain via "survival:...". Cross-domain
+	// references to those same files (first via an incomplete texture
+	// override, then via a "survival" modinfo dependency to fix load order)
+	// both still rendered as a missing-asset placeholder cube in-game
+	// ("Did not find required shape survival:... anywhere" in
+	// client-main.log) for reasons never conclusively pinned down. Bundling
+	// the assets locally sidesteps the whole class of cross-domain/
+	// load-order questions rather than resolving them — do this for any
+	// future vanilla-asset reuse too.
 	shape: { base: "item/tool/instrument/flute1" },
 	textures: {
 		coke: { base: "block/coal/coke" },

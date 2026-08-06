@@ -23,10 +23,10 @@ public class InstrumentsModSystem : ModSystem
 
         api.RegisterItemClass("ItemInstrument", typeof(ItemInstrument));
 
-        // Same registration order on both sides — required by the channel contract.
-        // Includes StopRequest, which the spec's §9 registration snippet omits
-        // but its own prose (§7.1, §9) clearly needs — see CLAUDE.md at the
-        // repo root.
+        // Same registration order on both sides — required by the channel
+        // contract. Includes StopRequest — client and server must agree on
+        // the full message type list, in the same order, or the channel
+        // won't decode packets correctly.
         api.Network.RegisterChannel(ChannelName)
             .RegisterMessageType<TogglePlayRequest>()
             .RegisterMessageType<NextInstrumentRequest>()
@@ -60,15 +60,13 @@ public class InstrumentsModSystem : ModSystem
         // Both are rebindable through the normal controls menu because
         // they're registered hotkeys.
         //
-        // No dedicated stop key (spec §7.1 had one as an idempotent escape
-        // hatch for client/server desync) — removed at the user's request:
-        // there are already several ways to stop a performance (drop the
-        // instrument, move, switch slots, ...), and a third key for
-        // something the toggle already does wasn't worth the keybind-list
-        // clutter for that edge case. StopRequest itself is unaffected —
-        // the client's local guard (InstrumentSoundManager) still sends it
-        // automatically whenever it detects a stop condition locally; only
-        // the manual hotkey that also sent it is gone.
+        // Deliberately no dedicated stop key: there are already several ways
+        // to stop a performance (drop the instrument, move, switch slots,
+        // ...), so a third key for something the play toggle already does
+        // isn't worth the keybind-list clutter. StopRequest itself is
+        // unaffected — the client's local guard (InstrumentSoundManager)
+        // still sends it automatically whenever it detects a stop condition
+        // locally; there's just no manual hotkey that also sends it.
         capi.Input.RegisterHotKey("instrument_play", Lang.Get("instruments:hotkey-instrument_play"),
             GlKeys.G, HotkeyType.CharacterControls);
         capi.Input.RegisterHotKey("instrument_next", Lang.Get("instruments:hotkey-instrument_next"),

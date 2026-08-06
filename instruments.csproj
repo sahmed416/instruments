@@ -2,10 +2,10 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- Matches VintagestoryAPI.dll's embedded TFM (.NETCoreApp,Version=v10.0)
-         on this machine's 1.22.3 install — verified in CLAUDE.md at the
-         repo root. Re-check this against your own install; the spec
-         explicitly warns not to guess it. -->
+    <!-- Matches VintagestoryAPI.dll's embedded TFM (.NETCoreApp,Version=v10.0).
+         Don't guess this — check your own install's DLL if it doesn't
+         match: a mismatched TargetFramework fails to build against the
+         game's reference assemblies. -->
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -56,9 +56,9 @@
 
   <!-- Stage a ready-to-copy mod folder under dist/ (gitignored), inside the
        repo — never outside it. This does NOT touch the game's real Mods
-       folder; that copy step is on you, deliberately, since it writes
-       outside the working directory. See CLAUDE.md at the repo root for
-       that command. -->
+       folder; that copy step is manual and deliberate, since it writes
+       outside the working directory — see the Installation section in
+       README.md for that command. -->
   <Target Name="StageModFolder" AfterTargets="Build">
     <ItemGroup>
       <ModAssets Include="assets\**\*.*" />

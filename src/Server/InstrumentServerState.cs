@@ -7,10 +7,10 @@ using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
 
 // No System.Linq here on purpose: Vintage Story's in-game source-mod
-// compiler doesn't reference it (confirmed by test-loading this mod against
-// a real 1.22.3 dedicated server — see CLAUDE.md at the repo root), so
-// plain loops are used throughout to stay portable between that path and a
-// normal `dotnet build`.
+// compiler (used when loading a mod straight from source, no prebuilt DLL)
+// doesn't reference System.Linq, even though it compiles fine under a
+// normal `dotnet build`. Plain loops are used throughout to stay portable
+// between both paths.
 
 namespace Instruments.Server;
 
