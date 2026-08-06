@@ -128,8 +128,7 @@ closed by default instead of silently being allowed through.
 
 - No crafting recipe yet — creative inventory or `/giveitem` only.
 - One song per instrument; no note-by-note or MIDI-style play.
-- The bundled `.ogg` files are short placeholder tones, not final
-  mastered tracks.
+- Only a single instrument is available at this time.
 
 ## Contributing
 
