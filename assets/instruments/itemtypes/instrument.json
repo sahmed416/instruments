@@ -53,7 +53,9 @@
 			{ code: "harmonica", sound: "instruments:sounds/instrument/harmonica", volume: 1.0, range: 8 },
 			{ code: "flute",     sound: "instruments:sounds/instrument/flute",     volume: 1.0, range: 8 },
 			{ code: "drums",     sound: "instruments:sounds/instrument/drums",     volume: 1.0, range: 8 },
-			{ code: "whistle",   sound: "instruments:sounds/instrument/whistle",   volume: 1.0, range: 8 }
+			{ code: "whistle",   sound: "instruments:sounds/instrument/whistle",   volume: 1.0, range: 8 },
+			{ code: "bow",       sound: "instruments:sounds/instrument/bow",       volume: 1.0, range: 8 },
+			{ code: "piano",     sound: "instruments:sounds/instrument/piano",     volume: 1.0, range: 8 }
 		]
 	}
 }

@@ -6,8 +6,9 @@ nearby hears it — positionally, in real time, synced across multiplayer.
 
 ## Features
 
-- **Five instruments in one item** — Banjo, Harmonica, Flute, Drums, and
-  Whistle. Cycle between them with a hotkey; no inventory clutter.
+- **Seven instruments in one item** — Banjo, Harmonica, Flute, Drums,
+  Whistle, Bow, and Piano. Cycle between them with a hotkey; no inventory
+  clutter.
 - **Positional audio** — louder up close, fades out as listeners move
   away, following the performer if they're seated or just looking around.
 - **Built for multiplayer** — server-authoritative from the ground up.
