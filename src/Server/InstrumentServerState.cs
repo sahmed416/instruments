@@ -30,6 +30,35 @@ public class Performance
     public Vec3d Anchor;   // position at start; movement away from this stops playback
     public int SlotIndex;  // active hotbar slot at start
     public bool WasSitting; // latch — see spec §8.2 "Sitting"
+    public int JamId;      // which jam session this performance belongs to
+
+    /// <summary>
+    /// Players who have already been sent this performance's start packet,
+    /// so the late-join scan doesn't re-send it every tick. Players who
+    /// wander well clear are dropped from here so that returning re-arms
+    /// them. Bounded by "players near this performer", and dies with the
+    /// performance.
+    /// </summary>
+    public readonly HashSet<string> NotifiedUids = new();
+}
+
+/// <summary>
+/// A group of performers whose loops are aligned to one shared clock, so
+/// they sound like they're playing together rather than each starting from
+/// the top of their own track.
+///
+/// Modelled as an explicit group with a single clock origin rather than
+/// "copy the position of whoever's nearby" on purpose: with pairwise
+/// copying, a third player syncing to a second who synced to a first
+/// compounds each hop's error. Referencing one origin means the error never
+/// accumulates no matter how many people join.
+/// </summary>
+public class JamSession
+{
+    public int Id;
+    /// <summary>Server ElapsedMilliseconds at which this jam's loop position was 0.</summary>
+    public long AnchorMs;
+    public readonly HashSet<string> Members = new();
 }
 
 /// <summary>
@@ -43,6 +72,25 @@ public class InstrumentServerState
     public const long WatchdogMs = 10 * 60 * 1000; // 10 minutes, spec §10.5
     public const int TickIntervalMs = 100;
 
+    /// <summary>
+    /// How often to look for players who have wandered into earshot of an
+    /// ongoing performance. Slower than the stop-condition tick because
+    /// nobody covers meaningful ground in half a second, and this one scans
+    /// every online player against every active performance.
+    /// </summary>
+    public const int ListenerScanEveryNTicks = 5; // ~500ms
+
+    /// <summary>
+    /// Earshot multipliers for the late-join scan. Notifying slightly beyond
+    /// the audible range means the sound is already running (inaudibly) by
+    /// the time someone is close enough to hear it, so it fades in rather
+    /// than popping. The wider forget threshold is hysteresis — without the
+    /// gap, someone standing exactly on the boundary would be dropped and
+    /// re-sent over and over.
+    /// </summary>
+    public const float NotifyRangeFactor = 1.5f;
+    public const float ForgetRangeFactor = 2.0f;
+
     readonly ICoreServerAPI sapi;
     readonly IServerNetworkChannel channel;
     ItemInstrument itemInstrumentCache;
@@ -53,6 +101,10 @@ public class InstrumentServerState
     readonly Dictionary<string, Performance> active = new();
     readonly Dictionary<string, long> lastToggleMs = new();
     readonly Dictionary<string, long> lastNextMs = new();
+
+    readonly Dictionary<int, JamSession> jams = new();
+    int nextJamId = 1;
+    int tickCounter;
 
     public InstrumentServerState(ICoreServerAPI sapi, IServerNetworkChannel channel)
     {
@@ -105,13 +157,31 @@ public class InstrumentServerState
     /// gate (§8.3) and for making sure the player isn't already active.
     /// Shared by <see cref="OnToggleRequest"/> and <see cref="OnNextRequest"/>
     /// (switching instruments mid-performance restarts through here too).
+    ///
+    /// <paramref name="inheritJamId"/> forces the performance into an
+    /// existing jam instead of searching for one by proximity. Used by the
+    /// instrument-switch path so switching mid-song keeps you in time with
+    /// whoever you were playing with — and, for a solo player, doesn't
+    /// restart their loop from the top.
     /// </summary>
-    void StartPerformance(IServerPlayer fromPlayer, EntityAgent entity, ItemSlot slot, ItemInstrument item)
+    void StartPerformance(IServerPlayer fromPlayer, EntityAgent entity, ItemSlot slot, ItemInstrument item, int inheritJamId = -1)
     {
         string uid = fromPlayer.PlayerUID;
 
         var def = item.CurrentDef(slot.Itemstack);
         if (def == null) return;
+
+        var pos = entity.Pos.XYZ.Clone();
+
+        JamSession jam;
+        if (inheritJamId >= 0 && jams.TryGetValue(inheritJamId, out jam))
+        {
+            jam.Members.Add(uid);
+        }
+        else
+        {
+            jam = FindOrCreateJam(uid, pos);
+        }
 
         var perf = new Performance
         {
@@ -119,19 +189,16 @@ public class InstrumentServerState
             EntityId = entity.EntityId,
             InstrumentIndex = item.GetInstrumentIndex(slot.Itemstack),
             StartedAtMs = sapi.World.ElapsedMilliseconds,
-            Anchor = entity.Pos.XYZ.Clone(),
+            Anchor = pos,
             SlotIndex = fromPlayer.InventoryManager.ActiveHotbarSlotNumber,
-            WasSitting = PerformanceGuard.IsSitting(entity)
+            WasSitting = PerformanceGuard.IsSitting(entity),
+            JamId = jam.Id
         };
         active[uid] = perf;
 
-        var startPacket = new PerformanceStartPacket
-        {
-            PlayerUid = uid,
-            EntityId = entity.EntityId,
-            InstrumentIndex = perf.InstrumentIndex
-        };
-        channel.SendPacket(startPacket, RecipientsInRange(perf.Anchor, def.Range));
+        var recipients = RecipientsInRange(perf.Anchor, def.Range);
+        channel.SendPacket(BuildStartPacket(perf), recipients);
+        foreach (var r in recipients) perf.NotifiedUids.Add(r.PlayerUID);
 
         StartAnimation(entity);
     }
@@ -159,9 +226,18 @@ public class InstrumentServerState
         // still rate-limited above the same as any other next-press, which
         // is what actually bounds "machine-gunning song intros" now instead
         // of a mandatory second press.
-        bool wasPerforming = active.ContainsKey(uid);
+        // Capture the jam before stopping — StopPerformance drops the jam
+        // once its last member leaves, so a solo player switching would
+        // otherwise land in a brand new jam and restart their loop from the
+        // top. Remembering the id *and* the anchor lets us put the same jam
+        // back if we were the one keeping it alive.
+        bool wasPerforming = active.TryGetValue(uid, out var prevPerf);
+        int inheritJamId = -1;
+        long inheritAnchorMs = 0;
         if (wasPerforming)
         {
+            inheritJamId = prevPerf.JamId;
+            if (jams.TryGetValue(inheritJamId, out var prevJam)) inheritAnchorMs = prevJam.AnchorMs;
             StopPerformance(uid, "switch");
         }
 
@@ -183,9 +259,144 @@ public class InstrumentServerState
             // performance the gate would otherwise have rejected.
             if (entity != null && !PerformanceGuard.AnyDisallowedInput(entity.Controls))
             {
-                StartPerformance(fromPlayer, entity, slot, item);
+                // Put the jam back if stopping emptied it, so the restart
+                // rejoins the same clock instead of starting a fresh one.
+                // Reusing the id is safe — nextJamId only ever increments.
+                if (inheritJamId >= 0 && !jams.ContainsKey(inheritJamId))
+                {
+                    jams[inheritJamId] = new JamSession { Id = inheritJamId, AnchorMs = inheritAnchorMs };
+                }
+                StartPerformance(fromPlayer, entity, slot, item, inheritJamId);
             }
         }
+    }
+
+    /// <summary>
+    /// Builds a start packet describing a performance as of *right now*.
+    /// Rebuilt per send rather than cached, because JamElapsedMs has to
+    /// reflect the current moment — a late joiner needs where the jam is
+    /// now, not where it was when the performance began.
+    /// </summary>
+    PerformanceStartPacket BuildStartPacket(Performance perf)
+    {
+        long jamElapsedMs = jams.TryGetValue(perf.JamId, out var jam)
+            ? sapi.World.ElapsedMilliseconds - jam.AnchorMs
+            : 0;
+
+        return new PerformanceStartPacket
+        {
+            PlayerUid = perf.PlayerUid,
+            EntityId = perf.EntityId,
+            InstrumentIndex = perf.InstrumentIndex,
+            JamId = perf.JamId,
+            JamElapsedMs = jamElapsedMs
+        };
+    }
+
+    float RangeOf(int instrumentIndex)
+    {
+        var defs = ItemInstrument?.Defs;
+        if (defs == null || defs.Length == 0) return 32f;
+        if (instrumentIndex < 0 || instrumentIndex >= defs.Length) return defs[0].Range;
+        return defs[instrumentIndex].Range;
+    }
+
+    /// <summary>
+    /// Late-join sync: hands ongoing performances to players who have come
+    /// within earshot since they started, so walking up to a performance
+    /// actually lets you hear it instead of waiting for them to restart.
+    ///
+    /// The position is carried by the jam clock, so a late joiner drops in
+    /// at the correct point in the loop rather than from the top — the same
+    /// mechanism that keeps performers in time with each other.
+    /// </summary>
+    void ScanForNewListeners()
+    {
+        if (active.Count == 0) return;
+
+        foreach (var kv in active)
+        {
+            var perf = kv.Value;
+            float range = RangeOf(perf.InstrumentIndex);
+            double notifySq = range * NotifyRangeFactor * (range * NotifyRangeFactor);
+            double forgetSq = range * ForgetRangeFactor * (range * ForgetRangeFactor);
+
+            // Drop anyone who's gone (disconnected, or wandered well clear)
+            // so that coming back re-arms them. Without the offline check, a
+            // player who reconnects would still be marked notified and would
+            // never be sent the performance again.
+            if (perf.NotifiedUids.Count > 0)
+            {
+                foreach (var luid in new List<string>(perf.NotifiedUids))
+                {
+                    var lp = sapi.World.PlayerByUid(luid);
+                    if (lp?.Entity?.Pos == null ||
+                        lp.Entity.Pos.XYZ.SquareDistanceTo(perf.Anchor) > forgetSq)
+                    {
+                        perf.NotifiedUids.Remove(luid);
+                    }
+                }
+            }
+
+            foreach (var p in sapi.World.AllOnlinePlayers)
+            {
+                var sp = (IServerPlayer)p;
+                if (sp.Entity?.Pos == null) continue;
+                if (perf.NotifiedUids.Contains(sp.PlayerUID)) continue;
+                if (sp.Entity.Pos.XYZ.SquareDistanceTo(perf.Anchor) > notifySq) continue;
+
+                channel.SendPacket(BuildStartPacket(perf), sp);
+                perf.NotifiedUids.Add(sp.PlayerUID);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Finds the jam of the nearest performer already playing within earshot,
+    /// or starts a new one. "Within earshot" uses that performer's own
+    /// instrument range, so the rule reads as: if you can hear someone
+    /// playing, you play along with them.
+    ///
+    /// Deliberately does NOT merge jams when a player stands between two of
+    /// them: merging would force everyone in one of the jams to jump to a
+    /// different position mid-song, which is audible. The newcomer picks the
+    /// nearest and the two jams stay independent.
+    /// </summary>
+    JamSession FindOrCreateJam(string uid, Vec3d pos)
+    {
+        var defs = ItemInstrument?.Defs;
+
+        JamSession best = null;
+        double bestDistSq = double.MaxValue;
+
+        foreach (var kv in active)
+        {
+            var other = kv.Value;
+            if (other.PlayerUid == uid) continue;
+            if (!jams.TryGetValue(other.JamId, out var otherJam)) continue;
+
+            float range = 32f;
+            if (defs != null && other.InstrumentIndex >= 0 && other.InstrumentIndex < defs.Length)
+            {
+                range = defs[other.InstrumentIndex].Range;
+            }
+
+            double distSq = other.Anchor.SquareDistanceTo(pos);
+            if (distSq <= range * range && distSq < bestDistSq)
+            {
+                bestDistSq = distSq;
+                best = otherJam;
+            }
+        }
+
+        if (best == null)
+        {
+            best = new JamSession { Id = nextJamId++, AnchorMs = sapi.World.ElapsedMilliseconds };
+            jams[best.Id] = best;
+        }
+
+        best.Members.Add(uid);
+        return best;
     }
 
     bool RateLimited(Dictionary<string, long> map, string uid)
@@ -259,6 +470,11 @@ public class InstrumentServerState
                 perf.Anchor = entity.Pos.XYZ.Clone();
             }
         }
+
+        // Deliberately after the stop checks: anything that ended this tick
+        // is already out of `active`, so a listener who just walked up can't
+        // be handed a performance that's in the middle of dying.
+        if (++tickCounter % ListenerScanEveryNTicks == 0) ScanForNewListeners();
     }
 
     // ------------------------------------------------------------ events
@@ -296,13 +512,14 @@ public class InstrumentServerState
         if (!active.TryGetValue(uid, out var perf)) return;
         active.Remove(uid);
 
-        var defs = ItemInstrument?.Defs;
-        InstrumentDef def = null;
-        if (defs != null && defs.Length > 0)
+        // Leave the jam; drop it once nobody's left in it. A jam outliving
+        // its last member would keep an increasingly stale clock around for
+        // someone who wanders back later.
+        if (jams.TryGetValue(perf.JamId, out var jam))
         {
-            def = perf.InstrumentIndex >= 0 && perf.InstrumentIndex < defs.Length ? defs[perf.InstrumentIndex] : defs[0];
+            jam.Members.Remove(uid);
+            if (jam.Members.Count == 0) jams.Remove(perf.JamId);
         }
-        float range = def?.Range ?? 32f;
 
         // Hard-cut for cases where the sound must go now (death/disconnect),
         // or where a fade would just overlap oddly with what's about to play
@@ -311,8 +528,14 @@ public class InstrumentServerState
         // this fires constantly (§10.5).
         bool fade = reason is not ("death" or "disconnect" or "switch");
 
+        // Addressed to exactly the players who were told to start it, rather
+        // than re-deriving "who's nearby" — those two sets no longer match
+        // now that late-join hands the performance out over time and only
+        // drops listeners at a wider radius. A listener sitting between the
+        // notify and forget thresholds would otherwise never be told to
+        // stop, and would be left with a silent sound running forever.
         var stopPacket = new PerformanceStopPacket { PlayerUid = uid, Fade = fade, Reason = reason };
-        channel.SendPacket(stopPacket, RecipientsInRange(perf.Anchor, range));
+        channel.SendPacket(stopPacket, NotifiedRecipients(perf));
 
         var player = sapi.World.PlayerByUid(uid) as IServerPlayer;
         if (player?.Entity != null)
@@ -341,10 +564,10 @@ public class InstrumentServerState
     }
 
     /// <summary>
-    /// Spec §9 "Recipient selection" — no whole-server broadcast, and no
-    /// per-listener bookkeeping (§10.4 deliberately cut that). Recomputed
-    /// fresh from <paramref name="pos"/> (the performer's anchor, which by
-    /// construction hasn't moved) each time a start or stop packet goes out.
+    /// Spec §9 "Recipient selection" — no whole-server broadcast. Used for
+    /// the initial send only ("who is nearby the instant this starts");
+    /// everything afterwards is addressed via <see cref="NotifiedRecipients"/>,
+    /// since late-join means the audience grows over time.
     /// </summary>
     IServerPlayer[] RecipientsInRange(Vec3d pos, float range)
     {
@@ -352,10 +575,26 @@ public class InstrumentServerState
         foreach (var p in sapi.World.AllOnlinePlayers)
         {
             var sp = (IServerPlayer)p;
-            if (sp.Entity?.Pos != null && sp.Entity.Pos.DistanceTo(pos) < range * 1.5f)
+            if (sp.Entity?.Pos != null && sp.Entity.Pos.DistanceTo(pos) < range * NotifyRangeFactor)
             {
                 result.Add(sp);
             }
+        }
+        return result.ToArray();
+    }
+
+    /// <summary>
+    /// The players currently believed to have this performance's sound
+    /// running — i.e. everyone sent a start packet and not since dropped.
+    /// Offline uids are skipped rather than pruned; the performance is about
+    /// to be discarded anyway wherever this is used.
+    /// </summary>
+    IServerPlayer[] NotifiedRecipients(Performance perf)
+    {
+        var result = new List<IServerPlayer>();
+        foreach (var luid in perf.NotifiedUids)
+        {
+            if (sapi.World.PlayerByUid(luid) is IServerPlayer sp) result.Add(sp);
         }
         return result.ToArray();
     }

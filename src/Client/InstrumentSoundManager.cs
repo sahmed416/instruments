@@ -36,6 +36,39 @@ public class InstrumentSoundManager
     readonly Dictionary<string, ILoadedSound> playing = new();
     readonly HashSet<string> warnedMissingSoundCodes = new();
 
+    /// <summary>Which jam each currently-playing sound belongs to, so a jam's
+    /// local anchor can be dropped once nothing here is using it.</summary>
+    readonly Dictionary<string, int> soundJamIds = new();
+
+    /// <summary>
+    /// Jam id → this client's OWN ElapsedMilliseconds reading at which that
+    /// jam's loop position was 0.
+    ///
+    /// The server sends an elapsed-time figure, but using it directly for
+    /// every sound would defeat the point: two sounds arriving at different
+    /// times pick up two different network-latency errors, so they'd be
+    /// misaligned *against each other* — which is the only misalignment
+    /// anyone can actually hear. Nobody hears two machines' speakers at
+    /// once, so cross-client absolute position doesn't matter; what matters
+    /// is that every sound in one listener's mix agrees.
+    ///
+    /// So the server figure is used exactly once per jam, to pin a local
+    /// anchor. Every sound afterwards derives its position from that single
+    /// local clock reading, making them exactly aligned regardless of
+    /// jitter. Latency then only shifts the whole jam uniformly on this
+    /// client, which is inaudible.
+    /// </summary>
+    readonly Dictionary<int, long> jamLocalAnchors = new();
+
+    /// <summary>
+    /// Sounds whose seek couldn't be applied at start (length not known
+    /// yet), retried on tick. Guards against LoadSound handing back a sound
+    /// whose buffer isn't measurable the instant it starts — untested
+    /// against a real client, so it fails soft rather than silently
+    /// desyncing.
+    /// </summary>
+    readonly Dictionary<string, int> pendingSeeks = new();
+
     /// <summary>Local mirror of the server's Performance record — anchor + sit
     /// latch — for the local player only. Null when not performing.</summary>
     class LocalPerformance
@@ -94,8 +127,24 @@ public class InstrumentSoundManager
             return;
         }
 
+        // Pin this jam's local anchor the first time we hear of it, then
+        // start everything in the jam from that one reading. See the
+        // jamLocalAnchors doc comment for why the server figure isn't used
+        // directly per sound.
+        if (!jamLocalAnchors.ContainsKey(pkt.JamId))
+        {
+            jamLocalAnchors[pkt.JamId] = capi.World.ElapsedMilliseconds - pkt.JamElapsedMs;
+        }
+
         sound.Start();
         playing[pkt.PlayerUid] = sound;
+        soundJamIds[pkt.PlayerUid] = pkt.JamId;
+
+        if (!TrySeekToJamPosition(pkt.PlayerUid, sound, pkt.JamId))
+        {
+            pendingSeeks[pkt.PlayerUid] = pkt.JamId;
+        }
+
         EnforceConcurrencyCap();
 
         bool isLocalPlayer = pkt.PlayerUid == capi.World.Player?.PlayerUID;
@@ -132,6 +181,20 @@ public class InstrumentSoundManager
         }
     }
 
+    void RetryPendingSeeks()
+    {
+        foreach (var uid in new List<string>(pendingSeeks.Keys))
+        {
+            int jamId = pendingSeeks[uid];
+            if (!playing.TryGetValue(uid, out var sound) || sound.IsDisposed)
+            {
+                pendingSeeks.Remove(uid);
+                continue;
+            }
+            if (TrySeekToJamPosition(uid, sound, jamId)) pendingSeeks.Remove(uid);
+        }
+    }
+
     void OnStopPacket(PerformanceStopPacket pkt)
     {
         StopFor(pkt.PlayerUid, pkt.Fade);
@@ -147,10 +210,37 @@ public class InstrumentSoundManager
         }
     }
 
+    /// <summary>
+    /// Seeks a sound to where the jam currently is, so it drops in on the
+    /// beat rather than from the top of its track. Returns false if the
+    /// sound can't report its length yet, in which case the caller should
+    /// retry — see <see cref="pendingSeeks"/>.
+    ///
+    /// The modulo happens here, against the real loaded sound, because the
+    /// server has no idea how long any .ogg is. Tracks of different lengths
+    /// therefore still share one origin; they just wrap at different rates.
+    /// </summary>
+    bool TrySeekToJamPosition(string uid, ILoadedSound sound, int jamId)
+    {
+        if (!jamLocalAnchors.TryGetValue(jamId, out long localAnchorMs)) return true; // nothing to sync to
+
+        float lengthSec = sound.SoundLengthSeconds;
+        if (lengthSec <= 0) return false;
+
+        double elapsedSec = (capi.World.ElapsedMilliseconds - localAnchorMs) / 1000.0;
+        double pos = elapsedSec % lengthSec;
+        if (pos < 0) pos += lengthSec;
+
+        sound.PlaybackPosition = (float)pos;
+        return true;
+    }
+
     // -------------------------------------------------------------- tick
 
     void Tick(float dt)
     {
+        if (pendingSeeks.Count > 0) RetryPendingSeeks();
+
         // Snapshot the keys — StopFor()/Cleanup() mutate `playing` mid-loop.
         var uids = new List<string>(playing.Keys);
         foreach (var uid in uids)
@@ -249,12 +339,37 @@ public class InstrumentSoundManager
     {
         if (!playing.TryGetValue(uid, out var sound)) return;
         playing.Remove(uid);
+        ForgetSoundJam(uid);
 
         if (fade) sound.FadeOutAndStop(StopFadeSeconds);
         else sound.Stop();
     }
 
-    void Cleanup(string uid) => playing.Remove(uid);
+    void Cleanup(string uid)
+    {
+        playing.Remove(uid);
+        ForgetSoundJam(uid);
+    }
+
+    /// <summary>
+    /// Drops a sound's jam association, and the jam's local anchor too once
+    /// nothing on this client is playing in that jam any more. Keeping the
+    /// anchor alive while *any* member is still audible is what lets a
+    /// player stop and restart — or switch instruments — and come back in on
+    /// the beat with whoever else is still going.
+    /// </summary>
+    void ForgetSoundJam(string uid)
+    {
+        pendingSeeks.Remove(uid);
+        if (!soundJamIds.TryGetValue(uid, out int jamId)) return;
+        soundJamIds.Remove(uid);
+
+        foreach (var kv in soundJamIds)
+        {
+            if (kv.Value == jamId) return; // someone's still in this jam
+        }
+        jamLocalAnchors.Remove(jamId);
+    }
 
     /// <summary>Called from the ModSystem on client dispose so no sound leaks past unload.</summary>
     public void Dispose()

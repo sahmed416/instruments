@@ -32,6 +32,27 @@ public class PerformanceStartPacket
     [ProtoMember(1)] public string PlayerUid;
     [ProtoMember(2)] public long EntityId;
     [ProtoMember(3)] public int InstrumentIndex;
+
+    /// <summary>
+    /// Which jam session this performance belongs to. Players who start
+    /// playing within earshot of an existing performer join that performer's
+    /// jam and share its clock, so their loops line up instead of drifting
+    /// against each other.
+    /// </summary>
+    [ProtoMember(4)] public int JamId;
+
+    /// <summary>
+    /// Milliseconds elapsed since this jam's clock origin (the moment the
+    /// loop position was 0). Deliberately NOT wrapped to a track length —
+    /// the server doesn't know how long any .ogg is, so the client takes
+    /// this modulo the actual loaded sound's length. That also means tracks
+    /// of differing lengths still stay phase-locked to one origin; they just
+    /// wrap at different rates.
+    ///
+    /// Only used to establish a *local* anchor the first time a client sees
+    /// a given jam — see InstrumentSoundManager for why that matters.
+    /// </summary>
+    [ProtoMember(5)] public long JamElapsedMs;
 }
 
 [ProtoContract]

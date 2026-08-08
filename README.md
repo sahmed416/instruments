@@ -11,6 +11,10 @@ nearby hears it — positionally, in real time, synced across multiplayer.
   clutter.
 - **Positional audio** — louder up close, fades out as listeners move
   away, following the performer if they're seated or just looking around.
+- **Jam together, automatically** — start playing within earshot of
+  someone already performing and your track drops in *on the beat* with
+  theirs instead of restarting from the top. No keybind, no setup; it
+  just happens.
 - **Built for multiplayer** — server-authoritative from the ground up.
   Multiple players can perform different songs at once, and everyone
   hears the mix.
@@ -36,8 +40,16 @@ disconnecting) stops it immediately. Press **H** mid-performance to switch
 songs — it cuts to the new instrument right away, no need to press play
 again.
 
-A player who walks into range mid-performance won't hear anything until
-the performer starts again — there's no catching a song partway through.
+If someone's already playing within earshot when you start, you'll
+automatically join their **jam** — your loop starts at the same point in
+the bar as theirs, so the two lock together instead of clashing.
+Switching instruments mid-song keeps you in time. Everyone in a jam
+shares one clock, so a third and fourth player joining stay just as tight
+as the first two.
+
+Walking up to someone already playing works too — you'll pick their music
+up partway through, at the right point in the loop, rather than waiting
+for them to start over.
 
 There's no crafting recipe yet. Grab the item from the creative inventory
 (search "instrument"), or with cheats enabled:
@@ -113,10 +125,21 @@ regardless.
 The server owns all performance state — clients only ever send empty
 requests ("toggle play", "next instrument") and react to what the server
 broadcasts. Broadcasts go only to players within hearing range of the
-performer, never the whole server, and there's deliberately no
-listener-tracking or late-join sync — that keeps the server-side
-bookkeeping to a single dictionary of active performances plus a
-per-player position anchor.
+performer, never the whole server. Each performance tracks who has been
+handed it, so players who wander into earshot later get it too, and
+players who wander well clear are dropped and re-armed if they return.
+
+Timing is carried by a **jam clock** rather than by copying anyone's
+playback position. Each jam has one origin, and every performance in it
+derives its position from that origin — so a fourth player joining is
+just as tight as the second, with no error compounding along a chain.
+Each client then pins its *own* local anchor the first time it sees a
+jam and positions every later sound in that jam from that single reading.
+That last part matters: using the server's figure per-sound would give
+each arriving sound its own network-latency error, leaving them
+misaligned against each other, which is the only misalignment a listener
+can actually perceive. Absolute position differing slightly between
+machines is inaudible, since nobody hears two clients' speakers at once.
 
 Stop conditions are an allow-list, not a block-list: a small shared
 predicate (`PerformanceGuard`) defines the narrow set of things allowed
@@ -129,7 +152,12 @@ closed by default instead of silently being allowed through.
 
 - No crafting recipe yet — creative inventory or `/giveitem` only.
 - One song per instrument; no note-by-note or MIDI-style play.
-- Only a single instrument is available at this time.
+- Jam sync assumes every track shares a tempo and bar length. All bundled
+  tracks are the same length, so they line up; a track at a different
+  tempo would still be positioned deterministically but wouldn't sound
+  musically aligned.
+- The held item always renders as the flute model, whichever instrument
+  is currently selected.
 
 ## Contributing
 
