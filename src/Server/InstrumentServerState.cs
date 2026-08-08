@@ -618,6 +618,16 @@ public class InstrumentServerState
         {
             StopAnimation(player.Entity);
         }
+
+        // Recompute suppression now rather than waiting for the periodic
+        // tick rebuild. This is the single exit path every stop funnels
+        // through, and the tick's rebuild is unreachable once `active`
+        // empties (Tick returns early when it's empty) — so without this,
+        // the last non-empty snapshot would stay published and keep
+        // suppressing spawns forever after the final performance ended.
+        // When performers remain, this republishes the correct reduced set;
+        // when none do, it publishes empty and spawning is back to vanilla.
+        RebuildSpawnSuppression();
     }
 
     void StartAnimation(EntityAgent entity)
