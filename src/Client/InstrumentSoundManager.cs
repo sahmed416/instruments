@@ -84,10 +84,83 @@ public class InstrumentSoundManager
         this.capi = capi;
         this.channel = channel;
 
+        // If a previous session died mid-performance, the player's music is
+        // still sitting at 0. Put it back before anything else.
+        if (RestoreMusic())
+        {
+            capi.Logger.Notification("[instruments] restored game music volume after an unclean shutdown");
+        }
+
         channel.SetMessageHandler<PerformanceStartPacket>(OnStartPacket);
         channel.SetMessageHandler<PerformanceStopPacket>(OnStopPacket);
 
         capi.Event.RegisterGameTickListener(Tick, TickIntervalMs);
+    }
+
+    // ------------------------------------------------- game music ducking
+
+    /// <summary>Vanilla client setting holding music volume, 0–100.</summary>
+    const string MusicLevelSetting = "musicLevel";
+
+    /// <summary>
+    /// Our own setting holding the music volume saved before ducking, or
+    /// <see cref="NotDucked"/> when we hold nothing.
+    ///
+    /// It exists because there's otherwise no way to tell "the player
+    /// deliberately set music to 0" apart from "we set it to 0 and never got
+    /// to put it back". Since it persists alongside the value we changed, a
+    /// crash mid-song is repaired on next launch instead of silently leaving
+    /// someone's music off forever with no clue why.
+    ///
+    /// Stored as a sentinel rather than deleted between uses because
+    /// ISettingsClass exposes Get/Set/Exists but no way to remove a key.
+    /// </summary>
+    const string SavedMusicLevelSetting = "instrumentsSavedMusicLevel";
+    const int NotDucked = -1;
+
+    bool musicDucked;
+
+    /// <summary>
+    /// Mutes the game soundtrack while anything is playing here, and puts it
+    /// back afterwards. Driven off the tick rather than the start/stop packet
+    /// handlers because sounds also disappear via the concurrency cap and via
+    /// cleanup of finished/unloaded sounds — one check covers every path.
+    ///
+    /// Works by moving the player's own music volume setting, which the
+    /// engine watches and reacts to live. That also means tracks starting
+    /// mid-performance come in already silent, with no polling needed.
+    /// </summary>
+    void UpdateMusicDucking()
+    {
+        bool wantDucked = playing.Count > 0;
+        if (wantDucked == musicDucked) return;
+
+        if (wantDucked) DuckMusic();
+        else RestoreMusic();
+    }
+
+    void DuckMusic()
+    {
+        musicDucked = true;
+
+        int current = capi.Settings.Int.Get(MusicLevelSetting, 0);
+        if (current <= 0) return; // music already off — nothing to mute or restore
+
+        capi.Settings.Int.Set(SavedMusicLevelSetting, current, false); // no watchers; internal bookkeeping
+        capi.Settings.Int[MusicLevelSetting] = 0;                      // watchers ON so the engine ducks now
+    }
+
+    /// <summary>Returns true if it actually put a saved volume back.</summary>
+    bool RestoreMusic()
+    {
+        musicDucked = false;
+
+        int saved = capi.Settings.Int.Get(SavedMusicLevelSetting, NotDucked);
+        if (saved < 0) return false; // nothing of ours outstanding
+
+        capi.Settings.Int[MusicLevelSetting] = saved;
+        capi.Settings.Int.Set(SavedMusicLevelSetting, NotDucked, false);
+        return true;
     }
 
     // --------------------------------------------------------------- net
@@ -260,6 +333,9 @@ public class InstrumentSoundManager
 
         EnforceConcurrencyCap();
         TickLocalGuard();
+
+        // Last, so it sees the final set of sounds for this tick.
+        UpdateMusicDucking();
     }
 
     /// <summary>
@@ -375,5 +451,7 @@ public class InstrumentSoundManager
     public void Dispose()
     {
         foreach (var uid in new List<string>(playing.Keys)) StopFor(uid, fade: false);
+        // Unloading the mod must not leave the player's music muted.
+        RestoreMusic();
     }
 }

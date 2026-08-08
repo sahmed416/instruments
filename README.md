@@ -15,6 +15,9 @@ nearby hears it — positionally, in real time, synced across multiplayer.
   someone already performing and your track drops in *on the beat* with
   theirs instead of restarting from the top. No keybind, no setup; it
   just happens.
+- **The soundtrack gets out of the way** — the game's background music
+  mutes itself while there's a performance within earshot, and comes back
+  when it ends.
 - **Music keeps the monsters away** — hostile creatures are less likely to
   spawn around a performance, and the bigger the jam the safer the ground:
   25% less for a lone player, up to 95% for four or more playing together.
@@ -144,6 +147,15 @@ each arriving sound its own network-latency error, leaving them
 misaligned against each other, which is the only misalignment a listener
 can actually perceive. Absolute position differing slightly between
 machines is inaudible, since nobody hears two clients' speakers at once.
+
+Muting the game soundtrack works by temporarily moving the player's own
+`musicLevel` setting to 0 — the engine watches that value and reacts
+immediately, so tracks that start mid-performance are already silent with
+no polling needed. Because that setting is persisted, the previous value
+is stashed under a private key and restored when the performance ends; if
+a session dies mid-song, the leftover key is detected at next client start
+and the volume put back. That key is the only way to distinguish "the
+player set music to 0" from "we set it to 0 and never got to undo it".
 
 Spawn suppression never alters game state. It hooks
 `EntityPlayer.OnCanSpawnNearby` and answers yes/no per spawn attempt,
