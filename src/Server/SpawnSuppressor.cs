@@ -30,7 +30,7 @@ namespace Instruments.Server;
 public class SpawnSuppressor
 {
     /// <summary>Suppression percent by jam size. Index 0 is unused.</summary>
-    static readonly int[] SuppressionByJamSize = { 0, 100, 100, 100, 100 }; //TODO: changing to 100 for testing. revert back to { 0, 25, 50, 75, 95 } later.
+    static readonly int[] SuppressionByJamSize = { 0, 50, 75, 85, 100 };
 
     public const string HostileGroup = "hostile";
 
