@@ -106,6 +106,8 @@ public class InstrumentServerState
     int nextJamId = 1;
     int tickCounter;
 
+    readonly SpawnSuppressor spawnSuppressor;
+
     public InstrumentServerState(ICoreServerAPI sapi, IServerNetworkChannel channel)
     {
         this.sapi = sapi;
@@ -115,9 +117,19 @@ public class InstrumentServerState
         channel.SetMessageHandler<StopRequest>(OnStopRequest);
         channel.SetMessageHandler<NextInstrumentRequest>(OnNextRequest);
 
+        spawnSuppressor = new SpawnSuppressor(sapi);
+
         sapi.Event.AfterActiveSlotChanged += OnSlotChanged;
         sapi.Event.PlayerDeath += OnPlayerDeath;
         sapi.Event.PlayerDisconnect += OnPlayerDisconnect;
+
+        // Attached to every player, not just performers — the handler is a
+        // dictionary lookup that returns immediately when nobody's playing,
+        // and this avoids churning subscriptions as people walk in and out of
+        // earshot. Respawn is included because it can hand us a fresh entity,
+        // which would otherwise silently lose the handler.
+        sapi.Event.PlayerNowPlaying += spawnSuppressor.Attach;
+        sapi.Event.PlayerRespawn += spawnSuppressor.Attach;
 
         sapi.Event.RegisterGameTickListener(Tick, TickIntervalMs);
     }
@@ -474,7 +486,64 @@ public class InstrumentServerState
         // Deliberately after the stop checks: anything that ended this tick
         // is already out of `active`, so a listener who just walked up can't
         // be handed a performance that's in the middle of dying.
-        if (++tickCounter % ListenerScanEveryNTicks == 0) ScanForNewListeners();
+        if (++tickCounter % ListenerScanEveryNTicks == 0)
+        {
+            ScanForNewListeners();
+            RebuildSpawnSuppression();
+        }
+    }
+
+    /// <summary>
+    /// Recomputes who currently gets spawn protection and publishes it as an
+    /// immutable snapshot for the (possibly off-thread) spawn callback.
+    ///
+    /// Rebuilt from scratch each pass rather than patched incrementally,
+    /// because protection depends on three independently moving things —
+    /// who's performing, how big their jam is, and who happens to be standing
+    /// nearby. Recomputing is a handful of loops over a short list and can't
+    /// drift out of sync the way incremental updates would.
+    /// </summary>
+    void RebuildSpawnSuppression()
+    {
+        if (active.Count == 0)
+        {
+            // Publish empty rather than skipping — this is what restores
+            // vanilla spawning the moment the last performance ends.
+            spawnSuppressor.Publish(new Dictionary<string, int>());
+            return;
+        }
+
+        var snapshot = new Dictionary<string, int>();
+
+        foreach (var kv in active)
+        {
+            var perf = kv.Value;
+            int jamSize = jams.TryGetValue(perf.JamId, out var jam) ? jam.Members.Count : 1;
+            int percent = SpawnSuppressor.SuppressionForJamSize(jamSize);
+            if (percent <= 0) continue;
+
+            // Everyone in earshot is protected, not just the performer —
+            // otherwise a friend standing inside a four-piece jam would still
+            // pull full spawns onto themselves.
+            float range = RangeOf(perf.InstrumentIndex);
+            double rangeSq = range * range;
+
+            foreach (var p in sapi.World.AllOnlinePlayers)
+            {
+                if (p.Entity?.Pos == null) continue;
+                if (p.Entity.Pos.XYZ.SquareDistanceTo(perf.Anchor) > rangeSq) continue;
+
+                // Overlapping jams don't stack — take the strongest, so two
+                // adjacent duos can't quietly add up to near-total immunity.
+                string uid = p.PlayerUID;
+                if (!snapshot.TryGetValue(uid, out int existing) || percent > existing)
+                {
+                    snapshot[uid] = percent;
+                }
+            }
+        }
+
+        spawnSuppressor.Publish(snapshot);
     }
 
     // ------------------------------------------------------------ events
@@ -497,6 +566,13 @@ public class InstrumentServerState
         StopPerformance(player.PlayerUID, "disconnect");
         lastToggleMs.Remove(player.PlayerUID);
         lastNextMs.Remove(player.PlayerUID);
+        spawnSuppressor.Detach(player);
+    }
+
+    /// <summary>Called on mod unload so no handler outlives the mod.</summary>
+    public void Dispose()
+    {
+        spawnSuppressor.DetachAll();
     }
 
     // ------------------------------------------------------------- exit

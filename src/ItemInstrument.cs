@@ -28,6 +28,15 @@ public class ItemInstrument : Item
 
     public InstrumentDef[] Defs { get; private set; } = System.Array.Empty<InstrumentDef>();
 
+    /// <summary>
+    /// Extra entity codes to treat as hostile for spawn suppression, on top
+    /// of anything that already declares <c>group: "hostile"</c> in its own
+    /// spawn conditions. Exists because that declaration is opt-in: modded
+    /// creatures frequently don't set it, and would otherwise ignore the
+    /// suppression entirely. Supports a trailing <c>*</c> wildcard.
+    /// </summary>
+    public string[] ExtraHostileCodes { get; private set; } = System.Array.Empty<string>();
+
     public override void OnLoaded(ICoreAPI api)
     {
         base.OnLoaded(api);
@@ -37,6 +46,31 @@ public class ItemInstrument : Item
         {
             api.World.Logger.Error("[instruments] instrument.json has no \"instruments\" attribute entries — item will have nothing to play.");
         }
+
+        ExtraHostileCodes = Attributes?["extraHostileCodes"]?.AsObject<string[]>() ?? System.Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// True if <paramref name="entityCode"/> matches one of
+    /// <see cref="ExtraHostileCodes"/>. Trailing <c>*</c> matches a prefix,
+    /// mirroring how VS itself writes code patterns.
+    /// </summary>
+    public bool MatchesExtraHostile(string entityCode)
+    {
+        if (entityCode == null) return false;
+        foreach (var pattern in ExtraHostileCodes)
+        {
+            if (string.IsNullOrEmpty(pattern)) continue;
+            if (pattern.EndsWith("*"))
+            {
+                if (entityCode.StartsWith(pattern.Substring(0, pattern.Length - 1), System.StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            else if (string.Equals(entityCode, pattern, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>
