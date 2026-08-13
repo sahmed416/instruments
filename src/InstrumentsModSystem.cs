@@ -99,9 +99,6 @@ public class InstrumentsModSystem : ModSystem
     public override void Dispose()
     {
         soundManager?.Dispose();
-        // Detaches the spawn-suppression handlers, so unloading the mod
-        // leaves spawning exactly as vanilla found it.
-        serverState?.Dispose();
         base.Dispose();
     }
 }

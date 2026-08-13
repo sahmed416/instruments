@@ -48,14 +48,6 @@
 	creativeinventory: { "general": ["*"], "items": ["*"], "tools": ["*"] },
 
 	attributes: {
-		// Extra entity codes treated as hostile for spawn suppression while
-		// an instrument is playing. Anything already declaring
-		// group: "hostile" in its own spawnconditions (vanilla drifters,
-		// locusts, wolves, bears, ...) is covered automatically and does not
-		// need listing here. This is for modded creatures that never set a
-		// spawn group. A trailing * matches a prefix.
-		extraHostileCodes: [],
-
 		instruments: [
 			{ code: "banjo",     sound: "instruments:sounds/instrument/banjo",     volume: 1.0, range: 8 },
 			{ code: "harmonica", sound: "instruments:sounds/instrument/harmonica", volume: 1.0, range: 8 },

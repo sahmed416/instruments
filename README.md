@@ -18,10 +18,6 @@ nearby hears it — positionally, in real time, synced across multiplayer.
 - **The soundtrack gets out of the way** — the game's background music
   mutes itself while there's a performance within earshot, and comes back
   when it ends.
-- **Music keeps the monsters away** — hostile creatures are less likely to
-  spawn around a performance, and the bigger the jam the safer the ground:
-  25% less for a lone player, up to 95% for four or more playing together.
-  Everyone in earshot is covered, not just the performers.
 - **Built for multiplayer** — server-authoritative from the ground up.
   Multiple players can perform different songs at once, and everyone
   hears the mix.
@@ -157,16 +153,6 @@ a session dies mid-song, the leftover key is detected at next client start
 and the volume put back. That key is the only way to distinguish "the
 player set music to 0" from "we set it to 0 and never got to undo it".
 
-Spawn suppression never alters game state. It hooks
-`EntityPlayer.OnCanSpawnNearby` and answers yes/no per spawn attempt,
-denying a percentage of hostile spawns to produce the reduction. It
-deliberately does *not* write to `RuntimeSpawnConditions.Chance` — those
-objects are shared globals, so editing one would change spawning for the
-whole server permanently. Stop playing and spawning is instantly back to
-vanilla with nothing to undo. Because the callback can run off the main
-thread, it reads only an immutable snapshot published by the server tick,
-never the live performance state.
-
 Stop conditions are an allow-list, not a block-list: a small shared
 predicate (`PerformanceGuard`) defines the narrow set of things allowed
 mid-performance (looking around, sitting down) and treats everything else
@@ -184,11 +170,6 @@ closed by default instead of silently being allowed through.
   musically aligned.
 - The held item always renders as the flute model, whichever instrument
   is currently selected.
-- Spawn suppression only covers creatures that declare
-  `group: "hostile"` in their spawn conditions (all vanilla hostiles do).
-  Modded creatures often don't, so list their entity codes under
-  `extraHostileCodes` in `assets/instruments/itemtypes/instrument.json` to
-  include them.
 
 ## Contributing
 
