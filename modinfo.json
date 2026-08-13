@@ -1,9 +1,9 @@
 {
   "type": "code",
-  "modid": "instruments",
-  "name": "Instruments",
+  "modid": "travellersinstruments",
+  "name": "Travellers",
   "authors": ["<you>"],
   "description": "Play music with friends.",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "dependencies": { "game": "1.22.3" }
 }
