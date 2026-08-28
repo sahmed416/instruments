@@ -18,6 +18,10 @@ nearby hears it — positionally, in real time, synced across multiplayer.
 - **The soundtrack gets out of the way** — the game's background music
   mutes itself while there's a performance within earshot, and comes back
   when it ends.
+- **Music steadies the world** — performing slowly restores your
+  temporal stability, and the bigger the jam the faster it comes back —
+  from a lone player's trickle up to two and a half times that for a
+  four-piece band.
 - **Built for multiplayer** — server-authoritative from the ground up.
   Multiple players can perform different songs at once, and everyone
   hears the mix.
@@ -152,6 +156,26 @@ is stashed under a private key and restored when the performance ends; if
 a session dies mid-song, the leftover key is detected at next client start
 and the volume put back. That key is the only way to distinguish "the
 player set music to 0" from "we set it to 0 and never got to undo it".
+
+Temporal stability restoration is tuned off vanilla's own arithmetic
+rather than picked by feel. `EntityBehaviorTemporalStabilityAffected`
+gains `(hereStability - 1) / 200` stability per second, and
+`hereStability` sits at its 1.5 ceiling above sea level — so a lone
+performer restores at 0.0025/s, exactly the rate you would get standing
+in the sun, and a full recovery takes about 400 seconds. Jam size scales
+that up to 2.5x and then stops: four players is the cap, so a bigger band
+is a nicer band, not an exploit. For reference the harshest drain vanilla
+applies is 0.00125/s, which means even a solo performer nets positive
+anywhere — deliberately, since holding still through a temporal storm to
+play is its own cost.
+
+The restore writes `OwnStability` directly instead of shifting the
+behavior's `stabilityOffset`. That field moves the *ambient* stability
+at the player's position, which also drives the glitch, fog and rust-rain
+effects and feeds a smoothed velocity, so aiming for a particular rate
+through it would mean fighting a second-order system for side effects
+nobody asked for. Because `OwnStability` is a watched attribute, writing
+it server-side reaches the client on its own — the feature adds no packet.
 
 Stop conditions are an allow-list, not a block-list: a small shared
 predicate (`PerformanceGuard`) defines the narrow set of things allowed

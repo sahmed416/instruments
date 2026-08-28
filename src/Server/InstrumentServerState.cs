@@ -5,6 +5,7 @@ using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Vintagestory.GameContent;
 
 // No System.Linq here on purpose: Vintage Story's in-game source-mod
 // compiler (used when loading a mod straight from source, no prebuilt DLL)
@@ -90,6 +91,25 @@ public class InstrumentServerState
     /// </summary>
     public const float NotifyRangeFactor = 1.5f;
     public const float ForgetRangeFactor = 2.0f;
+
+    /// <summary>
+    /// Temporal stability restored per second while performing, indexed by
+    /// how many instruments are in the jam. Index 0 is unused.
+    ///
+    /// Index 1 is deliberately vanilla's own above-ground recovery rate.
+    /// EntityBehaviorTemporalStabilityAffected gains (hereStability - 1) / 200
+    /// per second, and hereStability sits at its 1.5 ceiling above sea level
+    /// — so 0.0025/s, a full 0 -> 1 in roughly 400 seconds. For scale, the
+    /// worst drain vanilla applies (deep underground, or mid-storm) is
+    /// (0 - 1) / 800 = 0.00125/s, so even a lone player gains ground
+    /// anywhere — slowly, and only for as long as they hold still, since
+    /// almost any action stops the performance.
+    ///
+    /// Bigger jams scale up but saturate at four on purpose: 2.5x is a ~160
+    /// second recovery, which rewards playing together without making
+    /// stability something a band can simply ignore.
+    /// </summary>
+    static readonly double[] StabilityPerSecondByJamSize = { 0, 0.0025, 0.00375, 0.005, 0.00625 };
 
     readonly ICoreServerAPI sapi;
     readonly IServerNetworkChannel channel;
@@ -293,6 +313,13 @@ public class InstrumentServerState
         };
     }
 
+    public static double StabilityRateForJamSize(int jamSize)
+    {
+        if (jamSize <= 0) return 0;
+        if (jamSize >= StabilityPerSecondByJamSize.Length) return StabilityPerSecondByJamSize[StabilityPerSecondByJamSize.Length - 1];
+        return StabilityPerSecondByJamSize[jamSize];
+    }
+
     float RangeOf(int instrumentIndex)
     {
         var defs = ItemInstrument?.Defs;
@@ -471,12 +498,55 @@ public class InstrumentServerState
             }
         }
 
-        // Deliberately after the stop checks: anything that ended this tick
-        // is already out of `active`, so a listener who just walked up can't
-        // be handed a performance that's in the middle of dying.
+        // Both of these run after the stop checks: anything that ended this
+        // tick is already out of `active`, so nobody is paid stability for a
+        // performance that's in the middle of dying, and a listener who just
+        // walked up can't be handed one either.
+        RestoreStability(dt);
+
         if (++tickCounter % ListenerScanEveryNTicks == 0)
         {
             ScanForNewListeners();
+        }
+    }
+
+    /// <summary>
+    /// Slowly restores temporal stability to everyone currently performing,
+    /// faster the more instruments are in their jam — see
+    /// <see cref="StabilityPerSecondByJamSize"/> for the rates and why they
+    /// are what they are.
+    ///
+    /// Adds to <c>OwnStability</c> rather than moving the behavior's
+    /// <c>stabilityOffset</c>. That field shifts the *ambient* stability at
+    /// the player's position, which also drives the glitch, fog and
+    /// rust-rain effects and feeds a smoothed velocity — so hitting a wanted
+    /// rate through it means fighting a second-order system for a pile of
+    /// side effects nobody asked for. Adding to the value itself composes
+    /// cleanly with whatever vanilla did on the same tick, and
+    /// <c>OwnStability</c> is a watched attribute, so writing it here reaches
+    /// the client on its own with no packet of ours.
+    /// </summary>
+    void RestoreStability(float dt)
+    {
+        // Worlds with the mechanic switched off get nothing written to them.
+        if (!sapi.World.Config.GetBool("temporalStability", true)) return;
+
+        foreach (var kv in active)
+        {
+            var perf = kv.Value;
+            int jamSize = jams.TryGetValue(perf.JamId, out var jam) ? jam.Members.Count : 1;
+            double perSecond = StabilityRateForJamSize(jamSize);
+            if (perSecond <= 0) continue;
+
+            // Null when this world has no temporal stability at all: the
+            // behavior isn't attached, so there's nothing to restore.
+            var beh = sapi.World.PlayerByUid(perf.PlayerUid)?.Entity
+                ?.GetBehavior<EntityBehaviorTemporalStabilityAffected>();
+            if (beh == null) continue;
+
+            // Clamped here rather than left to vanilla's own clamp on its
+            // next tick, so a value above 1 is never published even briefly.
+            beh.OwnStability = GameMath.Clamp(beh.OwnStability + perSecond * dt, 0.0, 1.0);
         }
     }
 
