@@ -361,6 +361,26 @@ public class InstrumentServerState
                         lp.Entity.Pos.XYZ.SquareDistanceTo(perf.Anchor) > forgetSq)
                     {
                         perf.NotifiedUids.Remove(luid);
+
+                        // Tell them to drop the sound in the same breath as
+                        // dropping them. Membership here *means* "we believe
+                        // this client has this sound running", and
+                        // StopPerformance addresses exactly this set — so
+                        // removing someone silently strands a looping sound on
+                        // their client that no later stop can ever reach. It's
+                        // inaudible at this distance, which is what makes it
+                        // easy to miss: it only shows up when the performer
+                        // stops and then walks back over, and their music
+                        // starts up again out of nowhere.
+                        //
+                        // Offline players are skipped — there's no client left
+                        // to hold a sound, and reconnecting starts them clean.
+                        if (lp is IServerPlayer lsp)
+                        {
+                            channel.SendPacket(
+                                new PerformanceStopPacket { PlayerUid = perf.PlayerUid, Fade = true, Reason = "outofrange" },
+                                lsp);
+                        }
                     }
                 }
             }

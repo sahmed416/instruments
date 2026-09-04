@@ -4,6 +4,6 @@
   "name": "Travellers",
   "authors": ["<you>"],
   "description": "Play music with friends.",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "dependencies": { "game": "1.22.3" }
 }

@@ -135,6 +135,10 @@ broadcasts. Broadcasts go only to players within hearing range of the
 performer, never the whole server. Each performance tracks who has been
 handed it, so players who wander into earshot later get it too, and
 players who wander well clear are dropped and re-armed if they return.
+Being on that list means "this client has the sound running", so dropping
+someone off it always comes with a stop packet — otherwise their client
+would keep looping a performance that the eventual stop broadcast, which
+is addressed to that very list, could no longer reach.
 
 Timing is carried by a **jam clock** rather than by copying anyone's
 playback position. Each jam has one origin, and every performance in it

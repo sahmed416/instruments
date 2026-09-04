@@ -60,5 +60,15 @@ public class PerformanceStopPacket
 {
     [ProtoMember(1)] public string PlayerUid;
     [ProtoMember(2)] public bool Fade;    // true = fade out, false = hard stop
-    [ProtoMember(3)] public string Reason; // "key" | "action" | "moved" | "gotup" | "slot" | "death" | "disconnect" | "watchdog" | "switch"
+    /// <summary>
+    /// Diagnostic only — the client stops the same way regardless. One of:
+    /// "key", "action", "moved", "gotup", "slot", "death", "disconnect",
+    /// "watchdog", "switch", or "outofrange".
+    ///
+    /// "outofrange" is the odd one out: the performance is still going, and
+    /// this listener has simply walked far enough away that the server has
+    /// stopped tracking them. They get a fresh start packet if they come
+    /// back.
+    /// </summary>
+    [ProtoMember(3)] public string Reason;
 }
